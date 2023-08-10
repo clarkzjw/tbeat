@@ -195,10 +195,12 @@ class TweetsLoader:
 class MastodonLoader:
     tokens_filename = Path('mastodon_tokens.json')
 
-    def __init__(self, fqn: Optional[str] = None, since_id: Optional[str] = None) -> None:
+    def __init__(self, fqn: Optional[str] = None, since_id: Optional[str] = None, user_dict: Optional[dict] = None) -> None:
         self.fqn = fqn
         self._api = None
         self.since_id = since_id
+        self.user_dict = user_dict
+        self.screen_name = user_dict['screen_name']
 
     def load(self, source: str):
         if source.startswith('masto-api:'):
@@ -209,6 +211,10 @@ class MastodonLoader:
                     f'{fqn} != {self.fqn}'
                 )
             toots = self.load_toots_from_api(fqn)
+        elif source.startswith('masto-archive:'):
+            _, data_file = source.split(':')
+            if Path(data_file).name.endswith('outbox.json'):
+                toots = self.load_toots_from_json(Path(data_file))
         else:
             raise NotImplementedError()
         return toots
@@ -232,6 +238,43 @@ class MastodonLoader:
         parser = HTMLTagStripper()
         parser.feed(html)
         return parser.get_data()
+
+    def inject_user_dict(self, toot: dict):
+        '''Check if toot.actor is present. Inject toot.get('actor') if not.'''
+
+        actor = toot.get('actor')
+
+        if actor:
+            # Verify if user.screen_name of the incoming toot matches what we
+            # have in the index, to avoid importing toot into the wrong
+            # index.
+            if self.screen_name != actor.split('/')[-1]:
+                raise ValueError(
+                    f'Incoming tweet has user.screen_name={actor.split("/")[-1]}, '
+                    f'which does not match the last tweet in the index ({self.screen_name}).'
+                )
+
+            # Return the toot unmodified if sanity check passes.
+            return toot
+
+        if not self.user_dict:
+            tqdm.write('The tweet does not have a user dict and you did not provide user.screen_name.')
+            raise ValueError('Please provide user.screen_name')
+
+        toot['user'] = self.user_dict
+        return toot
+
+    def load_toots_from_json(self, filename: Path):
+        '''Load toots from Mastodon archive outbox.json file.'''
+
+        with open(filename, 'r') as f:
+            js = f.read()
+
+        data = json.loads(js)
+        for item in data['orderedItems']:
+            if item['type'] == 'Create' and item['object']['type'] == 'Note':
+                toot = self.inject_user_dict(item)
+                yield toot
 
     def load_toots_from_api(self, user_id: str):
         '''Use an infinite loop to load toots from Mastodon API. If since_id is
@@ -304,17 +347,24 @@ class ElasticsearchIngester:
         if isinstance(timestamp, datetime):
             return timestamp
 
-        try:
-            r = datetime.strptime(timestamp, '%a %b %d %H:%M:%S %z %Y')
-        except ValueError:
-            r = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S %z')
-        return r
+        for fmt in ('%a %b %d %H:%M:%S %z %Y',
+                    '%Y-%m-%d %H:%M:%S %z',
+                    '%Y-%m-%dT%H:%M:%SZ'):
+            try:
+                return datetime.strptime(timestamp, fmt)
+            except ValueError:
+                pass
+        raise ValueError(f'timestamp formatting error')
 
     def ingest(self, statuses):
 
         def gen_actions():
             for status in tqdm(statuses):
-                timestamp = self.parse_timestamp(status['created_at'])
+                if status.get('created_at'):
+                    timestamp = self.parse_timestamp(status['created_at'])
+                elif status.get('published'):
+                    timestamp = self.parse_timestamp(status['published'])
+
                 status['@timestamp'] = timestamp
                 action = {
                     '_index': self.index,
@@ -340,8 +390,11 @@ def main():
         since_id = last_status['id']
         twitter_user = last_status.get('user', {}).get('screen_name')
         mastodon_user = last_status.get('account', {}).get('fqn')
+        twitter_timestamp = last_status.get('created_at')
+        mastodon_timestamp = last_status.get('published')
         last_user = twitter_user or mastodon_user
-        tqdm.write(f'Last status in index {args.index} is {since_id} by {last_user} created at {last_status["created_at"]}.')
+        timestamp = twitter_timestamp or mastodon_timestamp
+        tqdm.write(f'Last status in index {args.index} is {since_id} by {last_user} created at {timestamp}.')
     else:
         since_id = None
         last_user = None
@@ -355,7 +408,7 @@ def main():
         user_dict = None
 
     if args.source.startswith('masto'):
-        loader = MastodonLoader(last_user, since_id)
+        loader = MastodonLoader(last_user, since_id, user_dict)
     else:
         loader = TweetsLoader(last_user, since_id, user_dict)
 
