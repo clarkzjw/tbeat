@@ -20,6 +20,7 @@ The script supports ingesting tweets/toots from various sources. The script will
 | Twitter Archive        | data/tweet.js<br>data/tweets.js<br>data/like.js<br>data/js/tweets/ |
 | Twitter API            | api:wzyboy<br>api-fav:wzyboy                                       |
 | Twitter API (local)    | statuses.jsonl<br>statuses.jl                                      |
+| Mastodon Archive       | masto-archive:outbox.json                                                        |
 | Mastodon API (Pleroma) | masto-api:someone@example.org                                      |
 
 ### Twitter Archive
@@ -52,6 +53,19 @@ To ingest all tweets posted by a user, use `api:username` as a source. To ingest
 ### Twitter API (local)
 
 For testing and debugging purposes only. The script expects a [JSON Lines](http://jsonlines.org/) file, each line of which being a [Twitter API status object](https://developer.twitter.com/en/docs/twitter-api/v1/tweets/post-and-engage/api-reference/get-statuses-show-id).
+
+### Mastodon Archive
+
+```
+├── actor.json
+├── avatar.jpg
+├── bookmarks.json
+├── header.jpg
+├── likes.json
+├── media_attachments
+│   └── files
+└── outbox.json
+```
 
 ### Mastodon API (Pleroma)
 
